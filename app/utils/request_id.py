@@ -1,15 +1,14 @@
 # app/utils/request_id.py
 import uuid
-from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 import logging
 
 logger = logging.getLogger(__name__)
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
-    """Add unique request ID to each request for tracing and debugging"""
+    """Add unique request ID to each request for tracing"""
     
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(self, request, call_next):
         # Get request ID from header or generate new one
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
         

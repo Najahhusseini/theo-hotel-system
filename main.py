@@ -1,7 +1,11 @@
 # main.py - The main FastAPI application
 from fastapi import FastAPI, WebSocket, Request
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import HTTPException
 import os
 import logging
+import time
+from datetime import datetime
 
 from app.core.database import engine, Base, check_db_connection
 from app.models import *
@@ -24,8 +28,10 @@ from app.utils.exceptions import register_exception_handlers
 # Setup middleware
 from app.utils.request_id import RequestIDMiddleware
 from app.utils.cors_config import setup_cors
-from app.utils.rate_limit import rate_limit_middleware, RATE_LIMITS
 from app.utils.security_headers import SecurityHeadersMiddleware
+
+# Setup alerts
+from app.utils.alerts import send_slack_alert, alert_on_high_latency, alert_on_critical_error
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +43,11 @@ logger.info("Database tables created")
 # Check database connection
 if not check_db_connection():
     logger.error("Database connection failed!")
+    send_slack_alert(
+        title="Database Connection Failed",
+        message="THEO API cannot connect to the database!",
+        color="danger"
+    )
 
 # Create FastAPI app
 app = FastAPI(
@@ -84,15 +95,66 @@ app = FastAPI(
     ]
 )
 
-# Add middleware
+# ==================== MIDDLEWARE ====================
+# Add request ID middleware (adds trace ID to every request)
 app.add_middleware(RequestIDMiddleware)
-setup_cors(app)
-# setup_rate_limiting(app)  # Comment out or remove this line
-app.add_middleware(SecurityHeadersMiddleware) 
 
+# Add CORS middleware
+setup_cors(app)
+
+# Add security headers
+app.add_middleware(SecurityHeadersMiddleware)
+
+# ==================== LATENCY MONITORING MIDDLEWARE ====================
+@app.middleware("http")
+async def latency_monitoring(request: Request, call_next):
+    """Monitor request latency and alert on slow responses"""
+    start_time = time.time()
+    
+    # Process request
+    response = await call_next(request)
+    
+    # Calculate latency
+    latency_ms = (time.time() - start_time) * 1000
+    
+    # Add latency header
+    response.headers["X-Response-Time-MS"] = str(int(latency_ms))
+    
+    # Alert on high latency (only in production)
+    if os.getenv("ENVIRONMENT") == "production" and latency_ms > 1000:
+        alert_on_high_latency(request.url.path, latency_ms)
+    
+    return response
+
+# ==================== ERROR HANDLING ====================
 # Register exception handlers
 register_exception_handlers(app)
 
+# Add custom error handler for critical errors
+@app.exception_handler(Exception)
+async def critical_error_handler(request: Request, exc: Exception):
+    """Handle critical errors with Slack alerts"""
+    error_id = str(int(time.time()))
+    logger.error(f"Critical error {error_id}: {exc}", exc_info=True)
+    
+    # Send alert for critical errors (only in production)
+    if os.getenv("ENVIRONMENT") == "production":
+        alert_on_critical_error(exc, {
+            "path": request.url.path,
+            "method": request.method,
+            "error_id": error_id
+        })
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal Server Error",
+            "error_id": error_id,
+            "message": "An unexpected error occurred. Our team has been notified."
+        }
+    )
+
+# ==================== ROUTERS ====================
 # Include REST API routers
 app.include_router(hotels_router, prefix="/api/v1")
 app.include_router(rooms_router, prefix="/api/v1")
@@ -108,7 +170,7 @@ app.include_router(monitoring_router, prefix="/api/v1")
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(metrics.router, prefix="/api/v1")
 
-# WebSocket route for real-time updates
+# ==================== WEBSOCKET ====================
 @app.websocket("/ws")
 async def websocket_route(
     websocket: WebSocket,
@@ -117,7 +179,7 @@ async def websocket_route(
 ):
     await websocket_endpoint(websocket, token, client_type)
 
-# Root endpoint
+# ==================== ROOT ENDPOINT ====================
 @app.get("/")
 def root():
     return {
@@ -127,10 +189,11 @@ def root():
         "database": "postgresql",
         "documentation": "/docs",
         "health": "/api/v1/health",
-        "metrics": "/api/v1/metrics"
+        "metrics": "/api/v1/metrics",
+        "timestamp": datetime.now().isoformat()
     }
 
-# Startup event
+# ==================== STARTUP EVENT ====================
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting THEO Hotel Management System...")
@@ -140,23 +203,28 @@ async def startup_event():
     # Check database connection
     if check_db_connection():
         logger.info("Database connection successful")
+        
+        # Send startup notification in production
+        if os.getenv("ENVIRONMENT") == "production":
+            send_slack_alert(
+                title="THEO API Started",
+                message=f"Version {os.getenv('APP_VERSION', '1.0.0')} is now running",
+                color="good",
+                fields=[
+                    {"title": "Environment", "value": os.getenv("ENVIRONMENT", "development")},
+                    {"title": "Time", "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                ]
+            )
     else:
         logger.error("Database connection failed!")
+        if os.getenv("ENVIRONMENT") == "production":
+            send_slack_alert(
+                title="Database Connection Failed",
+                message="THEO API cannot connect to the database!",
+                color="danger"
+            )
 
-# Add rate limiting middleware
-#@app.middleware("http")
-#async def rate_limit_middleware_wrapper(request: Request, call_next):
-#     try:
-#        rate_limit_middleware(request)
-#    except HTTPException as e:
-#        return JSONResponse(
-#            status_code=e.status_code,
-#            content={"error": e.detail, "message": e.detail}
-#        )
-#    response = await call_next(request)
-#    return response
-
-# Shutdown event
+# ==================== SHUTDOWN EVENT ====================
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Shutting down THEO Hotel Management System...")
@@ -164,3 +232,14 @@ async def shutdown_event():
     # Close database connections
     engine.dispose()
     logger.info("Database connections closed")
+    
+    # Send shutdown notification in production
+    if os.getenv("ENVIRONMENT") == "production":
+        send_slack_alert(
+            title="THEO API Shutting Down",
+            message="The API is stopping",
+            color="warning",
+            fields=[
+                {"title": "Time", "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+            ]
+        )
