@@ -1,0 +1,67 @@
+# docker-compose.prod.yml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: theo_postgres_prod
+    environment:
+      POSTGRES_USER: theo_admin
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: theo_database
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    networks:
+      - theo_network
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    container_name: theo_redis_prod
+    volumes:
+      - redis_prod_data:/data
+    networks:
+      - theo_network
+    restart: always
+    command: redis-server --appendonly yes
+
+  api:
+    build: .
+    container_name: theo_api_prod
+    environment:
+      DATABASE_URL: postgresql://theo_admin:${DB_PASSWORD}@postgres:5432/theo_database
+      REDIS_URL: redis://redis:6379
+      SECRET_KEY: ${SECRET_KEY}
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 480
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - theo_network
+    restart: always
+
+  nginx:
+    image: nginx:alpine
+    container_name: theo_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+    depends_on:
+      - api
+    networks:
+      - theo_network
+    restart: always
+
+networks:
+  theo_network:
+    driver: bridge
+
+volumes:
+  postgres_prod_data:
+  redis_prod_data:
