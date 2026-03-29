@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from app.core.database import get_db
 from app.models.hotel import Hotel
+from app.utils.cache import cached
 from app.schemas.hotel import HotelCreate, HotelUpdate, HotelResponse
 from app.utils.dependencies import (
     require_view_hotels, require_create_hotel, 
@@ -64,6 +65,7 @@ def create_hotel(
 
 # ==================== READ (All) ====================
 @router.get("/", response_model=List[HotelResponse])
+@cached(ttl=300) 
 def get_hotels(
     skip: int = Query(0, ge=0, description="Skip N records"),
     limit: int = Query(100, ge=1, le=1000, description="Limit results"),

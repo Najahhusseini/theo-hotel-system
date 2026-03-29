@@ -125,11 +125,12 @@ def retry_on_db_failure(max_retries=3, delay=1, backoff=2):
 def check_db_connection():
     try:
         with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+            conn.execute(text("SELECT 1"))  # Already has text() - good
             return True
     except Exception as e:
         logger.error(f"Database connection failed: {e}")
         return False
+
 def check_read_replica_connection():
     """Check read replica connection health"""
     if not READ_REPLICA_ENABLED:

@@ -1,6 +1,6 @@
 # app/api/reservations.py
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import and_, or_
 from typing import List, Optional
 from datetime import datetime, timedelta

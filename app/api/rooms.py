@@ -12,6 +12,7 @@ from app.utils.dependencies import (
     require_update_room, require_delete_room, require_update_room_status,
     get_current_user
 )
+from app.utils.cache import invalidate_cache
 from app.models.user import User
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
@@ -156,6 +157,11 @@ def update_room(
     
     db.commit()
     db.refresh(room)
+
+ # Invalidate cache for rooms list
+    invalidate_cache("get_available_rooms")
+    invalidate_cache("get_rooms")
+
     
     return room
 
