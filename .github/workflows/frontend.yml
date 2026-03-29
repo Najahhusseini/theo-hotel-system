@@ -1,0 +1,38 @@
+name: Frontend CI
+
+on:
+  push:
+    paths:
+      - 'frontend/**'
+    branches: [ main, frontend/* ]
+  pull_request:
+    paths:
+      - 'frontend/**'
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Use Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+    
+    - name: Install dependencies
+      run: |
+        cd frontend
+        npm install
+    
+    - name: Build frontend
+      run: |
+        cd frontend
+        npm run build --if-present
+    
+    - name: Check for console logs
+      run: |
+        cd frontend
+        ! grep -r "console.log" src/ || exit 1
