@@ -3,6 +3,8 @@ import os
 import redis
 import logging
 from typing import Optional
+from functools import wraps
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +74,6 @@ def get_cache_stats():
     except Exception as e:
         logger.error(f"Error getting cache stats: {e}")
         return {"error": str(e)}
-# Add this at the end of your cache.py file
-from functools import wraps
-import json
 
 def cached(ttl=300):
     """
@@ -119,19 +118,34 @@ def cached(ttl=300):
         return wrapper
     return decorator
 
-def clear_cache(pattern="*"):
-    """Clear cache keys matching pattern"""
+def invalidate_cache(pattern="*"):
+    """
+    Invalidate/clear cache keys matching pattern
+    This is the function that rooms.py is trying to import
+    
+    Usage:
+        invalidate_cache("room:*")  # Clears all room cache keys
+        invalidate_cache("*")       # Clears all cache
+    """
     if not redis_client:
-        return {"error": "Redis not available"}
+        logger.warning("Redis not available, cannot invalidate cache")
+        return {"error": "Redis not available", "cleared": 0}
+    
     try:
         keys = redis_client.keys(pattern)
         if keys:
             count = redis_client.delete(*keys)
+            logger.info(f"Invalidated {count} cache keys matching pattern: {pattern}")
             return {"cleared": count, "pattern": pattern}
+        logger.debug(f"No cache keys found matching pattern: {pattern}")
         return {"cleared": 0, "pattern": pattern}
     except Exception as e:
-        logger.error(f"Error clearing cache: {e}")
-        return {"error": str(e)}
+        logger.error(f"Error invalidating cache: {e}")
+        return {"error": str(e), "cleared": 0}
+
+def clear_cache(pattern="*"):
+    """Alias for invalidate_cache - clears cache keys matching pattern"""
+    return invalidate_cache(pattern)
 
 def get_cached(key):
     """Get a single cached value"""
@@ -154,3 +168,15 @@ def set_cached(key, value, ttl=300):
     except Exception as e:
         logger.error(f"Error setting cached key {key}: {e}")
         return False
+
+def cache_get(key):
+    """Alias for get_cached"""
+    return get_cached(key)
+
+def cache_set(key, value, ttl=300):
+    """Alias for set_cached"""
+    return set_cached(key, value, ttl)
+
+def cache_delete(pattern="*"):
+    """Alias for invalidate_cache"""
+    return invalidate_cache(pattern)
