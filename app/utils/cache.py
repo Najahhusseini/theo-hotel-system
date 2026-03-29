@@ -72,3 +72,85 @@ def get_cache_stats():
     except Exception as e:
         logger.error(f"Error getting cache stats: {e}")
         return {"error": str(e)}
+# Add this at the end of your cache.py file
+from functools import wraps
+import json
+
+def cached(ttl=300):
+    """
+    Cache decorator for API endpoints
+    ttl: time to live in seconds (default 5 minutes)
+    
+    Usage:
+        @cached(ttl=60)
+        async def my_endpoint():
+            return data
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            if not redis_client:
+                # If Redis isn't available, just execute the function
+                return await func(*args, **kwargs)
+            
+            # Create cache key from function name and arguments
+            cache_key = f"{func.__name__}:{str(args)}:{str(kwargs)}"
+            
+            try:
+                # Try to get from cache
+                cached_result = redis_client.get(cache_key)
+                if cached_result:
+                    logger.debug(f"Cache hit for {cache_key}")
+                    return json.loads(cached_result)
+            except Exception as e:
+                logger.warning(f"Cache read error: {e}")
+            
+            # Execute function
+            result = await func(*args, **kwargs)
+            
+            # Store in cache
+            try:
+                redis_client.setex(cache_key, ttl, json.dumps(result))
+                logger.debug(f"Cached {cache_key} for {ttl}s")
+            except Exception as e:
+                logger.warning(f"Cache write error: {e}")
+            
+            return result
+        return wrapper
+    return decorator
+
+def clear_cache(pattern="*"):
+    """Clear cache keys matching pattern"""
+    if not redis_client:
+        return {"error": "Redis not available"}
+    try:
+        keys = redis_client.keys(pattern)
+        if keys:
+            count = redis_client.delete(*keys)
+            return {"cleared": count, "pattern": pattern}
+        return {"cleared": 0, "pattern": pattern}
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
+        return {"error": str(e)}
+
+def get_cached(key):
+    """Get a single cached value"""
+    if not redis_client:
+        return None
+    try:
+        value = redis_client.get(key)
+        return json.loads(value) if value else None
+    except Exception as e:
+        logger.error(f"Error getting cached key {key}: {e}")
+        return None
+
+def set_cached(key, value, ttl=300):
+    """Set a single cached value"""
+    if not redis_client:
+        return False
+    try:
+        redis_client.setex(key, ttl, json.dumps(value))
+        return True
+    except Exception as e:
+        logger.error(f"Error setting cached key {key}: {e}")
+        return False
