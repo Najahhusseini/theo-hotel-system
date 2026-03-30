@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.core.database import get_db
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.hotel import Hotel
 from app.models.room import Room, RoomType, RoomStatus
 from app.utils.security import get_password_hash
@@ -20,40 +20,68 @@ def fix_everything(db: Session = Depends(get_db)):
         # Rollback any pending transaction
         db.rollback()
         
-        # 1. Fix admin using direct SQL
+        # 1. Fix admin using direct SQL with correct column names
         try:
             # Check if admin exists
             admin_check = db.execute(text("SELECT id FROM users WHERE username = 'admin'")).fetchone()
             
+            # Hash the password
+            password_hash = get_password_hash("admin123")
+            
             if admin_check:
-                # Update existing admin
+                # Update existing admin - unlock and update password
                 db.execute(text("""
                     UPDATE users 
-                    SET is_active = true, 
-                        hashed_password = :password
+                    SET is_active = true,
+                        is_locked = false,
+                        failed_login_attempts = 0,
+                        password_hash = :password_hash
                     WHERE username = 'admin'
-                """), {"password": get_password_hash("admin123")})
-                results.append("✅ Updated existing admin")
+                """), {"password_hash": password_hash})
+                results.append("✅ Updated existing admin - unlocked and password reset")
             else:
                 # Create new admin
                 db.execute(text("""
-                    INSERT INTO users (username, email, full_name, hashed_password, role, is_active, created_at)
-                    VALUES (:username, :email, :full_name, :password, :role, true, NOW())
+                    INSERT INTO users (
+                        username, 
+                        email, 
+                        password_hash,
+                        first_name,
+                        last_name,
+                        role, 
+                        is_active,
+                        is_locked,
+                        failed_login_attempts,
+                        created_at
+                    )
+                    VALUES (
+                        :username, 
+                        :email, 
+                        :password_hash,
+                        :first_name,
+                        :last_name,
+                        :role, 
+                        true,
+                        false,
+                        0,
+                        NOW()
+                    )
                 """), {
                     "username": "admin",
                     "email": "admin@theo.com",
-                    "full_name": "System Administrator",
-                    "password": get_password_hash("admin123"),
-                    "role": "admin"
+                    "password_hash": password_hash,
+                    "first_name": "System",
+                    "last_name": "Administrator",
+                    "role": UserRole.SUPER_ADMIN.value
                 })
-                results.append("✅ Created new admin")
+                results.append("✅ Created new admin user")
             
             db.commit()
             results.append("✅ Admin fixed successfully")
             
         except Exception as e:
             db.rollback()
-            results.append(f"⚠️ Admin fix error: {str(e)[:100]}")
+            results.append(f"⚠️ Admin fix error: {str(e)[:200]}")
         
         # 2. Create hotel if none exists
         try:
@@ -80,18 +108,23 @@ def fix_everything(db: Session = Depends(get_db)):
             
             hotel_id = hotel[0] if hotel else None
             
-            # 3. Create rooms if none exist
-            if hotel_id:
+        except Exception as e:
+            db.rollback()
+            results.append(f"⚠️ Hotel error: {str(e)[:100]}")
+        
+        # 3. Create rooms if none exist
+        if hotel_id:
+            try:
                 room_count = db.execute(text("SELECT COUNT(*) FROM rooms WHERE hotel_id = :hotel_id"), {"hotel_id": hotel_id}).fetchone()[0]
                 
                 if room_count == 0:
                     rooms_data = [
-                        (101, 1, "standard", 15000, 2, False),
-                        (102, 1, "standard", 15000, 2, False),
-                        (201, 2, "deluxe", 25000, 2, True),
-                        (202, 2, "deluxe", 25000, 2, True),
-                        (301, 3, "suite", 40000, 4, True),
-                        (302, 3, "presidential", 80000, 6, True),
+                        ("101", 1, "standard", 15000, 2, False),
+                        ("102", 1, "standard", 15000, 2, False),
+                        ("201", 2, "deluxe", 25000, 2, True),
+                        ("202", 2, "deluxe", 25000, 2, True),
+                        ("301", 3, "suite", 40000, 4, True),
+                        ("302", 3, "presidential", 80000, 6, True),
                     ]
                     
                     for room_num, floor, r_type, price, occupancy, view in rooms_data:
@@ -99,7 +132,7 @@ def fix_everything(db: Session = Depends(get_db)):
                             INSERT INTO rooms (room_number, floor, room_type, price_per_night, max_occupancy, has_view, status, hotel_id)
                             VALUES (:room_number, :floor, :room_type, :price, :occupancy, :view, 'clean', :hotel_id)
                         """), {
-                            "room_number": str(room_num),
+                            "room_number": room_num,
                             "floor": floor,
                             "room_type": r_type,
                             "price": price,
@@ -113,9 +146,9 @@ def fix_everything(db: Session = Depends(get_db)):
                 else:
                     results.append(f"ℹ️ Rooms already exist ({room_count} rooms)")
                     
-        except Exception as e:
-            db.rollback()
-            results.append(f"⚠️ Hotel/room error: {str(e)[:100]}")
+            except Exception as e:
+                db.rollback()
+                results.append(f"⚠️ Room error: {str(e)[:100]}")
         
         return {
             "success": True,
