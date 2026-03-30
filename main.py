@@ -6,6 +6,7 @@ import logging
 from app.core.database import engine, Base, check_db_connection
 from app.models import *
 from app.websocket.routes import websocket_endpoint
+from app.api.setup import router as setup_router
 from app.api.monitoring import router as monitoring_router
 from app.api import (
     hotels_router, rooms_router, reservations_router, 
@@ -99,6 +100,7 @@ app.include_router(housekeeping_router, prefix="/api/v1")
 app.include_router(billing_router, prefix="/api/v1")
 app.include_router(maintenance_router, prefix="/api/v1")
 app.include_router(monitoring_router, prefix="/api/v1")
+app.include_router(setup_router, prefix="/api/v1")
 
 # Include health and metrics
 app.include_router(health.router, prefix="/api/v1")
