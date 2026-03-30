@@ -5,6 +5,7 @@ from app.models.hotel import Hotel
 from app.models.room import Room, RoomType, RoomStatus
 from app.utils.security import get_password_hash
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import logging
 
 router = APIRouter(prefix="/one-time-setup", tags=["setup"])
@@ -16,17 +17,39 @@ def fix_admin(db: Session = Depends(get_db)):
     try:
         results = []
         
-        # Fix or create admin user
+        # First, check what columns exist in the users table
+        try:
+            # Get column names from users table
+            result = db.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'users'
+            """))
+            user_columns = [row[0] for row in result]
+            logger.info(f"User table columns: {user_columns}")
+            results.append(f"📋 Found columns: {', '.join(user_columns[:10])}...")
+        except Exception as e:
+            logger.warning(f"Could not get columns: {e}")
+            user_columns = []
+        
+        # Find or create admin user
         admin = db.query(User).filter(User.username == "admin").first()
         
         if admin:
-            # Force unlock admin
+            # Force unlock admin - update ALL possible lock fields
             admin.is_active = True
-            # Reset any lock fields
+            
+            # Update various possible lock fields
             if hasattr(admin, 'failed_login_attempts'):
                 admin.failed_login_attempts = 0
+            if hasattr(admin, 'login_attempts'):
+                admin.login_attempts = 0
             if hasattr(admin, 'locked_until'):
                 admin.locked_until = None
+            if hasattr(admin, 'locked_at'):
+                admin.locked_at = None
+            if hasattr(admin, 'is_locked'):
+                admin.is_locked = False
             
             # Update password to ensure it's correct
             admin.hashed_password = get_password_hash("admin123")
@@ -45,6 +68,20 @@ def fix_admin(db: Session = Depends(get_db)):
             db.add(admin)
             db.flush()
             results.append("✅ Created new admin user")
+        
+        # Also try direct SQL update to be absolutely sure
+        try:
+            db.execute(text("""
+                UPDATE users 
+                SET is_active = true, 
+                    failed_login_attempts = 0,
+                    locked_until = NULL
+                WHERE username = 'admin'
+            """))
+            db.commit()
+            results.append("✅ Direct SQL update applied")
+        except Exception as e:
+            logger.warning(f"Direct SQL update failed: {e}")
         
         # Create test hotel if none exists
         hotel = db.query(Hotel).first()
@@ -90,8 +127,23 @@ def fix_admin(db: Session = Depends(get_db)):
         
         db.commit()
         
-        # Test login to verify it works
-        test_login = db.query(User).filter(User.username == "admin", User.is_active == True).first()
+        # Verify the admin is now active
+        db.refresh(admin) if admin else None
+        
+        # Double-check with direct SQL
+        check_result = db.execute(text("SELECT is_active FROM users WHERE username = 'admin'")).first()
+        is_active_sql = check_result[0] if check_result else None
+        
+        results.append(f"✅ Admin active status from SQL: {is_active_sql}")
+        
+        # Try to login directly via API call to verify
+        import requests
+        login_response = None
+        try:
+            # This won't work inside the app, just for logging
+            pass
+        except:
+            pass
         
         return {
             "success": True,
@@ -101,7 +153,8 @@ def fix_admin(db: Session = Depends(get_db)):
                 "username": "admin",
                 "password": "admin123"
             },
-            "admin_active": test_login is not None
+            "admin_active": admin.is_active if admin else False,
+            "admin_active_sql": is_active_sql
         }
         
     except Exception as e:
